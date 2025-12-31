@@ -129,7 +129,7 @@ fn complex_xml() -> String {
 
 fn bench_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("Serialization");
-    
+
     let simple = simple_data();
     let medium = medium_data();
     let complex = complex_data();
@@ -151,7 +151,7 @@ fn bench_serialization(c: &mut Criterion) {
 
 fn bench_deserialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("Deserialization");
-    
+
     let simple_xml = simple_xml();
     let medium_xml = medium_xml();
     let complex_xml = complex_xml();
@@ -176,7 +176,7 @@ fn bench_deserialization(c: &mut Criterion) {
 
 fn bench_roundtrip(c: &mut Criterion) {
     let mut group = c.benchmark_group("Roundtrip");
-    
+
     let simple = simple_data();
     let medium = medium_data();
     let complex = complex_data();
@@ -207,9 +207,9 @@ fn bench_roundtrip(c: &mut Criterion) {
 
 fn bench_escape(c: &mut Criterion) {
     use serde_xml::escape;
-    
+
     let mut group = c.benchmark_group("Escape");
-    
+
     let no_escape = "This is a simple string with no special characters at all.";
     let some_escape = "This string has <angle brackets> & ampersands.";
     let heavy_escape = "<<<<>>>> &&&&& \"\"\"\" ''''";
@@ -231,9 +231,9 @@ fn bench_escape(c: &mut Criterion) {
 
 fn bench_xml_reader(c: &mut Criterion) {
     use serde_xml::{XmlReader, XmlEvent};
-    
+
     let mut group = c.benchmark_group("XmlReader");
-    
+
     let xml = r#"<?xml version="1.0"?>
         <root>
             <child1 attr="value">Text content</child1>
@@ -265,7 +265,7 @@ fn bench_xml_reader(c: &mut Criterion) {
 
 fn bench_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("Scaling");
-    
+
     for size in [1, 10, 100, 1000].iter() {
         let data: Vec<Simple> = (0..*size)
             .map(|i| Simple {
