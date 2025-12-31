@@ -24,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-serde-xml = "0.1"
+serde-xml-fast = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 ```
 

@@ -385,7 +385,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-xml"
+name = "serde-xml-fast"
 version = "0.1.0"
 dependencies = [
  "criterion",

@@ -1,5 +1,5 @@
 [package]
-name = "serde-xml"
+name = "serde-xml-fast"
 version = "0.1.0"
 edition = "2021"
 authors = ["Pegasus Heavy Industries LLC"]
@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 description = "A fast, 100% Serde-compatible XML serialization and deserialization library"
 repository = "https://github.com/pegasusheavy/serde-xml"
 homepage = "https://github.com/pegasusheavy/serde-xml"
-documentation = "https://docs.rs/serde-xml"
+documentation = "https://docs.rs/serde-xml-fast"
 keywords = ["xml", "serde", "serialization", "deserialization", "parser"]
 categories = ["encoding", "parser-implementations"]
 readme = "README.md"
