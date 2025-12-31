@@ -14,9 +14,11 @@ A fast, 100% Serde-compatible XML serialization and deserialization library for 
 
 | Operation | Throughput |
 |-----------|------------|
-| Serialization (simple) | ~5M structs/sec |
-| Deserialization | 180+ MiB/s |
-| XML Parsing | 460+ MiB/s |
+| Serialization (simple) | ~5.8M structs/sec |
+| Serialization (complex) | ~256K structs/sec |
+| Deserialization | 190-200 MiB/s |
+| XML Parsing | 580+ MiB/s |
+| Roundtrip (simple) | ~1.85M ops/sec |
 
 ## Installation
 
