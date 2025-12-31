@@ -3,37 +3,38 @@
 //! This module provides fast, allocation-minimizing functions for escaping
 //! and unescaping XML special characters.
 
-use memchr::memchr3;
-
+use memchr::memchr;
 
 /// Escapes XML special characters in a string.
 ///
 /// Returns a `Cow<str>` to avoid allocation when no escaping is needed.
 #[inline]
 pub fn escape(s: &str) -> std::borrow::Cow<'_, str> {
-    // Fast path: check if any escaping is needed
-    if !needs_escape(s.as_bytes()) {
+    let bytes = s.as_bytes();
+    
+    // Fast path: scan for any character needing escape
+    let needs_escape = bytes.iter().any(|&b| matches!(b, b'<' | b'>' | b'&' | b'"' | b'\''));
+    
+    if !needs_escape {
         return std::borrow::Cow::Borrowed(s);
     }
 
     let mut result = String::with_capacity(s.len() + s.len() / 8);
-    escape_to(s, &mut result);
+    escape_to_inner(bytes, &mut result);
     std::borrow::Cow::Owned(result)
-}
-
-/// Checks if a byte slice needs escaping.
-#[inline]
-fn needs_escape(bytes: &[u8]) -> bool {
-    memchr3(b'<', b'>', b'&', bytes).is_some()
-        || memchr::memchr2(b'"', b'\'', bytes).is_some()
 }
 
 /// Escapes XML special characters and appends to the given string.
 #[inline]
 pub fn escape_to(s: &str, out: &mut String) {
-    let bytes = s.as_bytes();
-    let mut start = 0;
+    escape_to_inner(s.as_bytes(), out);
+}
 
+/// Internal escape implementation - simple byte-by-byte with batching.
+#[inline(always)]
+fn escape_to_inner(bytes: &[u8], out: &mut String) {
+    let mut start = 0;
+    
     for (i, &byte) in bytes.iter().enumerate() {
         let escaped = match byte {
             b'<' => "&lt;",
@@ -43,24 +44,23 @@ pub fn escape_to(s: &str, out: &mut String) {
             b'\'' => "&apos;",
             _ => continue,
         };
-
+        
+        // Batch append non-escaped bytes
         if start < i {
-            // SAFETY: We're slicing at valid UTF-8 boundaries since we only
-            // escape ASCII characters.
+            // SAFETY: Only escaping ASCII chars, so UTF-8 boundaries are preserved
             out.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[start..i]) });
         }
         out.push_str(escaped);
         start = i + 1;
     }
-
+    
+    // Append remaining
     if start < bytes.len() {
         out.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[start..]) });
     }
 }
 
 /// Escapes XML special characters for attribute values.
-///
-/// This is the same as `escape` but optimized for attribute values.
 #[inline]
 pub fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
     escape(s)
@@ -71,14 +71,23 @@ pub fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
 /// Returns a `Cow<str>` to avoid allocation when no unescaping is needed.
 #[inline]
 pub fn unescape(s: &str) -> Result<std::borrow::Cow<'_, str>, UnescapeError> {
-    // Fast path: check if any unescaping is needed
-    if !s.contains('&') {
-        return Ok(std::borrow::Cow::Borrowed(s));
+    let bytes = s.as_bytes();
+    
+    // Fast path: check if any unescaping is needed using memchr
+    match memchr(b'&', bytes) {
+        None => Ok(std::borrow::Cow::Borrowed(s)),
+        Some(first_amp) => {
+            let mut result = String::with_capacity(s.len());
+            // Add everything before the first &
+            if first_amp > 0 {
+                result.push_str(unsafe { 
+                    std::str::from_utf8_unchecked(&bytes[..first_amp]) 
+                });
+            }
+            unescape_from(bytes, first_amp, &mut result)?;
+            Ok(std::borrow::Cow::Owned(result))
+        }
     }
-
-    let mut result = String::with_capacity(s.len());
-    unescape_to(s, &mut result)?;
-    Ok(std::borrow::Cow::Owned(result))
 }
 
 /// Error type for unescape operations.
@@ -99,45 +108,67 @@ impl std::fmt::Display for UnescapeError {
 impl std::error::Error for UnescapeError {}
 
 /// Unescapes XML entities and appends to the given string.
+#[inline]
 pub fn unescape_to(s: &str, out: &mut String) -> Result<(), UnescapeError> {
     let bytes = s.as_bytes();
-    let mut i = 0;
-    let mut start = 0;
+    match memchr(b'&', bytes) {
+        None => {
+            out.push_str(s);
+            Ok(())
+        }
+        Some(first_amp) => {
+            if first_amp > 0 {
+                out.push_str(unsafe { 
+                    std::str::from_utf8_unchecked(&bytes[..first_amp]) 
+                });
+            }
+            unescape_from(bytes, first_amp, out)
+        }
+    }
+}
 
+/// Internal unescape starting from a position known to have '&'.
+#[inline(always)]
+fn unescape_from(bytes: &[u8], start: usize, out: &mut String) -> Result<(), UnescapeError> {
+    let mut i = start;
+    
     while i < bytes.len() {
         if bytes[i] == b'&' {
-            // Append text before the entity
-            if start < i {
-                out.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[start..i]) });
-            }
-
             let entity_start = i;
             i += 1;
-
-            // Find the end of the entity
-            let semicolon = bytes[i..].iter().position(|&b| b == b';');
-            match semicolon {
-                Some(len) if len > 0 => {
-                    let entity = unsafe { std::str::from_utf8_unchecked(&bytes[i..i + len]) };
-                    let decoded = decode_entity(entity);
-
-                    match decoded {
-                        Some(c) => out.push(c),
-                        None => {
-                            // Try numeric character reference
-                            if let Some(c) = decode_numeric_entity(entity) {
-                                out.push(c);
-                            } else {
-                                return Err(UnescapeError {
-                                    entity: format!("&{};", entity),
-                                    position: entity_start,
+            
+            // Find semicolon using memchr for speed
+            match memchr(b';', &bytes[i..]) {
+                Some(len) if len > 0 && len <= 10 => {
+                    let entity = unsafe { 
+                        std::str::from_utf8_unchecked(&bytes[i..i + len]) 
+                    };
+                    
+                    if let Some(c) = decode_entity_fast(entity) {
+                        out.push(c);
+                        i += len + 1;
+                        
+                        // Find and append text until next &
+                        if let Some(next_amp) = memchr(b'&', &bytes[i..]) {
+                            if next_amp > 0 {
+                                out.push_str(unsafe { 
+                                    std::str::from_utf8_unchecked(&bytes[i..i + next_amp]) 
                                 });
                             }
+                            i += next_amp;
+                        } else {
+                            // No more entities
+                            out.push_str(unsafe { 
+                                std::str::from_utf8_unchecked(&bytes[i..]) 
+                            });
+                            return Ok(());
                         }
+                    } else {
+                        return Err(UnescapeError {
+                            entity: format!("&{};", entity),
+                            position: entity_start,
+                        });
                     }
-
-                    i += len + 1;
-                    start = i;
                 }
                 _ => {
                     return Err(UnescapeError {
@@ -150,36 +181,38 @@ pub fn unescape_to(s: &str, out: &mut String) -> Result<(), UnescapeError> {
             i += 1;
         }
     }
-
-    if start < bytes.len() {
-        out.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[start..]) });
-    }
-
+    
     Ok(())
 }
 
-/// Decodes a named XML entity.
-#[inline]
-fn decode_entity(entity: &str) -> Option<char> {
-    match entity {
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "amp" => Some('&'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        _ => None,
+/// Fast entity decoder with common cases first.
+#[inline(always)]
+fn decode_entity_fast(entity: &str) -> Option<char> {
+    // Check length first to avoid string comparisons
+    match entity.len() {
+        2 => match entity {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            _ => decode_numeric_entity(entity),
+        },
+        3 => match entity {
+            "amp" => Some('&'),
+            _ => decode_numeric_entity(entity),
+        },
+        4 => match entity {
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => decode_numeric_entity(entity),
+        },
+        _ => decode_numeric_entity(entity),
     }
 }
 
 /// Decodes a numeric character reference (&#NNN; or &#xHHH;).
 #[inline]
 fn decode_numeric_entity(entity: &str) -> Option<char> {
-    if entity.is_empty() {
-        return None;
-    }
-
     let bytes = entity.as_bytes();
-    if bytes[0] != b'#' {
+    if bytes.is_empty() || bytes[0] != b'#' {
         return None;
     }
 

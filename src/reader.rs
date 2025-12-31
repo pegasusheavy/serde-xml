@@ -5,8 +5,55 @@
 
 use crate::error::{Error, Position, Result};
 use crate::escape::unescape;
-use memchr::memchr;
+use memchr::{memchr, memchr2};
 use std::borrow::Cow;
+
+/// Whitespace lookup table for fast checking.
+static IS_WHITESPACE: [bool; 256] = {
+    let mut lut = [false; 256];
+    lut[b' ' as usize] = true;
+    lut[b'\t' as usize] = true;
+    lut[b'\n' as usize] = true;
+    lut[b'\r' as usize] = true;
+    lut
+};
+
+/// Name start character lookup table.
+static IS_NAME_START: [bool; 256] = {
+    let mut lut = [false; 256];
+    let mut i = b'A';
+    while i <= b'Z' {
+        lut[i as usize] = true;
+        i += 1;
+    }
+    let mut i = b'a';
+    while i <= b'z' {
+        lut[i as usize] = true;
+        i += 1;
+    }
+    lut[b'_' as usize] = true;
+    lut[b':' as usize] = true;
+    // Allow high bytes for UTF-8
+    let mut i: usize = 0x80;
+    while i < 256 {
+        lut[i] = true;
+        i += 1;
+    }
+    lut
+};
+
+/// Name character lookup table.
+static IS_NAME_CHAR: [bool; 256] = {
+    let mut lut = IS_NAME_START;
+    let mut i = b'0';
+    while i <= b'9' {
+        lut[i as usize] = true;
+        i += 1;
+    }
+    lut[b'-' as usize] = true;
+    lut[b'.' as usize] = true;
+    lut
+};
 
 /// An XML event produced by the reader.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,7 +138,7 @@ impl<'a> XmlReader<'a> {
             pos: 0,
             line: 1,
             col: 1,
-            element_stack: Vec::new(),
+            element_stack: Vec::with_capacity(8), // Pre-allocate for typical nesting
         }
     }
 
@@ -112,12 +159,12 @@ impl<'a> XmlReader<'a> {
     }
 
     /// Reads the next XML event.
+    #[inline]
     pub fn next_event(&mut self) -> Result<XmlEvent<'a>> {
-        self.skip_whitespace();
+        self.skip_whitespace_fast();
 
         if self.pos >= self.input.len() {
-            if !self.element_stack.is_empty() {
-                let tag = self.element_stack.pop().unwrap();
+            if let Some(tag) = self.element_stack.pop() {
                 return Err(Error::unclosed_tag(tag).with_position(self.position()));
             }
             return Ok(XmlEvent::Eof);
@@ -130,37 +177,40 @@ impl<'a> XmlReader<'a> {
         }
     }
 
-    /// Skips whitespace characters.
-    fn skip_whitespace(&mut self) {
+    /// Fast whitespace skipping using lookup table.
+    #[inline(always)]
+    fn skip_whitespace_fast(&mut self) {
         while self.pos < self.input.len() {
-            match self.input[self.pos] {
-                b' ' | b'\t' | b'\r' => {
-                    self.pos += 1;
-                    self.col += 1;
-                }
-                b'\n' => {
-                    self.pos += 1;
-                    self.line += 1;
-                    self.col = 1;
-                }
-                _ => break,
+            let b = self.input[self.pos];
+            if !IS_WHITESPACE[b as usize] {
+                break;
             }
-        }
-    }
-
-    /// Reads text content.
-    fn read_text(&mut self) -> Result<XmlEvent<'a>> {
-        let start = self.pos;
-
-        // Find the end of text (start of next tag or end of input)
-        while self.pos < self.input.len() && self.input[self.pos] != b'<' {
-            if self.input[self.pos] == b'\n' {
+            if b == b'\n' {
                 self.line += 1;
                 self.col = 1;
             } else {
                 self.col += 1;
             }
             self.pos += 1;
+        }
+    }
+
+    /// Reads text content using memchr for fast scanning.
+    #[inline]
+    fn read_text(&mut self) -> Result<XmlEvent<'a>> {
+        let start = self.pos;
+
+        // Fast path: find '<' using SIMD-accelerated memchr
+        match memchr(b'<', &self.input[self.pos..]) {
+            Some(offset) => {
+                // Update position tracking
+                self.update_position_for_range(self.pos, self.pos + offset);
+                self.pos += offset;
+            }
+            None => {
+                self.update_position_for_range(self.pos, self.input.len());
+                self.pos = self.input.len();
+            }
         }
 
         let text = std::str::from_utf8(&self.input[start..self.pos])
@@ -169,7 +219,6 @@ impl<'a> XmlReader<'a> {
         // Trim whitespace from text
         let trimmed = text.trim();
         if trimmed.is_empty() {
-            // Skip whitespace-only text and read the next event
             return self.next_event();
         }
 
@@ -180,7 +229,23 @@ impl<'a> XmlReader<'a> {
         }
     }
 
+    /// Updates line/column tracking for a range of bytes.
+    #[inline(always)]
+    fn update_position_for_range(&mut self, start: usize, end: usize) {
+        // Count newlines in the range
+        let slice = &self.input[start..end];
+        for &b in slice {
+            if b == b'\n' {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+        }
+    }
+
     /// Reads a tag (element, comment, CDATA, PI, or declaration).
+    #[inline]
     fn read_tag(&mut self) -> Result<XmlEvent<'a>> {
         debug_assert_eq!(self.input[self.pos], b'<');
         self.pos += 1;
@@ -199,11 +264,12 @@ impl<'a> XmlReader<'a> {
     }
 
     /// Reads a start element or empty element.
+    #[inline]
     fn read_start_element(&mut self) -> Result<XmlEvent<'a>> {
         let name = self.read_name()?;
         let attributes = self.read_attributes()?;
 
-        self.skip_whitespace();
+        self.skip_whitespace_fast();
 
         if self.pos >= self.input.len() {
             return Err(Error::unexpected_eof().with_position(self.position()));
@@ -233,13 +299,14 @@ impl<'a> XmlReader<'a> {
     }
 
     /// Reads an end element.
+    #[inline]
     fn read_end_element(&mut self) -> Result<XmlEvent<'a>> {
         debug_assert_eq!(self.input[self.pos], b'/');
         self.pos += 1;
         self.col += 1;
 
         let name = self.read_name()?;
-        self.skip_whitespace();
+        self.skip_whitespace_fast();
         self.expect_char(b'>')?;
 
         // Validate matching tags
@@ -266,32 +333,37 @@ impl<'a> XmlReader<'a> {
             return self.read_xml_decl();
         }
 
-        self.skip_whitespace();
+        self.skip_whitespace_fast();
 
-        // Read data until ?>
+        // Read data until ?> using memchr for speed
         let data_start = self.pos;
+        
         while self.pos + 1 < self.input.len() {
-            if self.input[self.pos] == b'?' && self.input[self.pos + 1] == b'>' {
-                let data = std::str::from_utf8(&self.input[data_start..self.pos])
-                    .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
-                self.pos += 2;
-                self.col += 2;
-                return Ok(XmlEvent::ProcessingInstruction {
-                    target: Cow::Borrowed(target),
-                    data: if data.trim().is_empty() {
-                        None
-                    } else {
-                        Some(Cow::Borrowed(data.trim()))
-                    },
-                });
-            }
-            if self.input[self.pos] == b'\n' {
-                self.line += 1;
-                self.col = 1;
+            if let Some(offset) = memchr(b'?', &self.input[self.pos..]) {
+                let check_pos = self.pos + offset;
+                if check_pos + 1 < self.input.len() && self.input[check_pos + 1] == b'>' {
+                    self.update_position_for_range(self.pos, check_pos);
+                    self.pos = check_pos;
+                    
+                    let data = std::str::from_utf8(&self.input[data_start..self.pos])
+                        .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
+                    self.pos += 2;
+                    self.col += 2;
+                    return Ok(XmlEvent::ProcessingInstruction {
+                        target: Cow::Borrowed(target),
+                        data: if data.trim().is_empty() {
+                            None
+                        } else {
+                            Some(Cow::Borrowed(data.trim()))
+                        },
+                    });
+                }
+                // Not the end, continue searching
+                self.update_position_for_range(self.pos, check_pos + 1);
+                self.pos = check_pos + 1;
             } else {
-                self.col += 1;
+                break;
             }
-            self.pos += 1;
         }
 
         Err(Error::syntax("unterminated processing instruction").with_position(self.position()))
@@ -300,7 +372,7 @@ impl<'a> XmlReader<'a> {
     /// Reads an XML declaration.
     fn read_xml_decl(&mut self) -> Result<XmlEvent<'a>> {
         let attributes = self.read_attributes()?;
-        self.skip_whitespace();
+        self.skip_whitespace_fast();
 
         if self.pos + 1 >= self.input.len()
             || self.input[self.pos] != b'?'
@@ -364,59 +436,63 @@ impl<'a> XmlReader<'a> {
         Err(Error::syntax("unknown construct after '<!'").with_position(self.position()))
     }
 
-    /// Reads a comment.
+    /// Reads a comment using memchr for fast end detection.
     fn read_comment(&mut self) -> Result<XmlEvent<'a>> {
         self.pos += 2; // Skip --
         self.col += 2;
         let start = self.pos;
 
+        // Search for --> using memchr
         while self.pos + 2 < self.input.len() {
-            if self.input[self.pos] == b'-'
-                && self.input[self.pos + 1] == b'-'
-                && self.input[self.pos + 2] == b'>'
-            {
-                let comment = std::str::from_utf8(&self.input[start..self.pos])
-                    .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
-                self.pos += 3;
-                self.col += 3;
-                return Ok(XmlEvent::Comment(Cow::Borrowed(comment.trim())));
-            }
-            if self.input[self.pos] == b'\n' {
-                self.line += 1;
-                self.col = 1;
+            if let Some(offset) = memchr(b'-', &self.input[self.pos..]) {
+                let check_pos = self.pos + offset;
+                if check_pos + 2 < self.input.len() 
+                    && self.input[check_pos + 1] == b'-' 
+                    && self.input[check_pos + 2] == b'>' 
+                {
+                    self.update_position_for_range(self.pos, check_pos);
+                    let comment = std::str::from_utf8(&self.input[start..check_pos])
+                        .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
+                    self.pos = check_pos + 3;
+                    self.col += 3;
+                    return Ok(XmlEvent::Comment(Cow::Borrowed(comment.trim())));
+                }
+                self.update_position_for_range(self.pos, check_pos + 1);
+                self.pos = check_pos + 1;
             } else {
-                self.col += 1;
+                break;
             }
-            self.pos += 1;
         }
 
         Err(Error::syntax("unterminated comment").with_position(self.position()))
     }
 
-    /// Reads a CDATA section.
+    /// Reads a CDATA section using memchr for fast end detection.
     fn read_cdata(&mut self) -> Result<XmlEvent<'a>> {
         self.pos += 7; // Skip [CDATA[
         self.col += 7;
         let start = self.pos;
 
+        // Search for ]]> using memchr
         while self.pos + 2 < self.input.len() {
-            if self.input[self.pos] == b']'
-                && self.input[self.pos + 1] == b']'
-                && self.input[self.pos + 2] == b'>'
-            {
-                let data = std::str::from_utf8(&self.input[start..self.pos])
-                    .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
-                self.pos += 3;
-                self.col += 3;
-                return Ok(XmlEvent::CData(Cow::Borrowed(data)));
-            }
-            if self.input[self.pos] == b'\n' {
-                self.line += 1;
-                self.col = 1;
+            if let Some(offset) = memchr(b']', &self.input[self.pos..]) {
+                let check_pos = self.pos + offset;
+                if check_pos + 2 < self.input.len() 
+                    && self.input[check_pos + 1] == b']' 
+                    && self.input[check_pos + 2] == b'>' 
+                {
+                    self.update_position_for_range(self.pos, check_pos);
+                    let data = std::str::from_utf8(&self.input[start..check_pos])
+                        .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
+                    self.pos = check_pos + 3;
+                    self.col += 3;
+                    return Ok(XmlEvent::CData(Cow::Borrowed(data)));
+                }
+                self.update_position_for_range(self.pos, check_pos + 1);
+                self.pos = check_pos + 1;
             } else {
-                self.col += 1;
+                break;
             }
-            self.pos += 1;
         }
 
         Err(Error::syntax("unterminated CDATA section").with_position(self.position()))
@@ -427,26 +503,31 @@ impl<'a> XmlReader<'a> {
         let mut depth = 1;
 
         while self.pos < self.input.len() && depth > 0 {
-            match self.input[self.pos] {
-                b'<' => depth += 1,
-                b'>' => depth -= 1,
-                b'\n' => {
-                    self.line += 1;
-                    self.col = 1;
-                    self.pos += 1;
-                    continue;
+            // Use memchr2 to find < or > quickly
+            if let Some(offset) = memchr2(b'<', b'>', &self.input[self.pos..]) {
+                self.update_position_for_range(self.pos, self.pos + offset);
+                self.pos += offset;
+                
+                match self.input[self.pos] {
+                    b'<' => depth += 1,
+                    b'>' => depth -= 1,
+                    _ => {}
                 }
-                _ => {}
+                self.col += 1;
+                self.pos += 1;
+            } else {
+                self.update_position_for_range(self.pos, self.input.len());
+                self.pos = self.input.len();
+                break;
             }
-            self.col += 1;
-            self.pos += 1;
         }
 
         // Skip to next event
         self.next_event()
     }
 
-    /// Reads an XML name.
+    /// Reads an XML name using lookup table.
+    #[inline]
     fn read_name(&mut self) -> Result<&'a str> {
         let start = self.pos;
 
@@ -456,15 +537,15 @@ impl<'a> XmlReader<'a> {
         }
 
         let first = self.input[self.pos];
-        if !is_name_start_char(first) {
+        if !IS_NAME_START[first as usize] {
             return Err(Error::invalid_name(format!("invalid name start character: {:?}", first as char))
                 .with_position(self.position()));
         }
         self.pos += 1;
         self.col += 1;
 
-        // Subsequent characters
-        while self.pos < self.input.len() && is_name_char(self.input[self.pos]) {
+        // Subsequent characters - use lookup table
+        while self.pos < self.input.len() && IS_NAME_CHAR[self.input[self.pos] as usize] {
             self.pos += 1;
             self.col += 1;
         }
@@ -473,12 +554,13 @@ impl<'a> XmlReader<'a> {
             .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))
     }
 
-    /// Reads element attributes.
+    /// Reads element attributes with pre-allocated vector.
+    #[inline]
     fn read_attributes(&mut self) -> Result<Vec<Attribute<'a>>> {
-        let mut attributes = Vec::new();
+        let mut attributes = Vec::with_capacity(4); // Pre-allocate for typical case
 
         loop {
-            self.skip_whitespace();
+            self.skip_whitespace_fast();
 
             if self.pos >= self.input.len() {
                 break;
@@ -492,11 +574,11 @@ impl<'a> XmlReader<'a> {
 
             // Read attribute name
             let name = self.read_name()?;
-            self.skip_whitespace();
+            self.skip_whitespace_fast();
 
             // Expect '='
             self.expect_char(b'=')?;
-            self.skip_whitespace();
+            self.skip_whitespace_fast();
 
             // Read attribute value
             let value = self.read_attribute_value()?;
@@ -510,7 +592,8 @@ impl<'a> XmlReader<'a> {
         Ok(attributes)
     }
 
-    /// Reads an attribute value.
+    /// Reads an attribute value using memchr for fast quote finding.
+    #[inline]
     fn read_attribute_value(&mut self) -> Result<Cow<'a, str>> {
         if self.pos >= self.input.len() {
             return Err(Error::unexpected_eof().with_position(self.position()));
@@ -525,7 +608,7 @@ impl<'a> XmlReader<'a> {
 
         let start = self.pos;
 
-        // Find closing quote
+        // Find closing quote using memchr
         match memchr(quote, &self.input[self.pos..]) {
             Some(offset) => {
                 let value = std::str::from_utf8(&self.input[start..self.pos + offset])
@@ -544,6 +627,7 @@ impl<'a> XmlReader<'a> {
     }
 
     /// Expects a specific character.
+    #[inline(always)]
     fn expect_char(&mut self, expected: u8) -> Result<()> {
         if self.pos >= self.input.len() {
             return Err(Error::unexpected_eof().with_position(self.position()));
@@ -562,19 +646,6 @@ impl<'a> XmlReader<'a> {
         self.col += 1;
         Ok(())
     }
-}
-
-/// Checks if a byte is a valid XML name start character.
-#[inline]
-fn is_name_start_char(b: u8) -> bool {
-    matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'_' | b':')
-        || b >= 0x80 // Allow UTF-8 continuation bytes (simplified check)
-}
-
-/// Checks if a byte is a valid XML name character.
-#[inline]
-fn is_name_char(b: u8) -> bool {
-    is_name_start_char(b) || matches!(b, b'0'..=b'9' | b'-' | b'.')
 }
 
 #[cfg(test)]
