@@ -11,10 +11,10 @@ use memchr::memchr;
 #[inline]
 pub fn escape(s: &str) -> std::borrow::Cow<'_, str> {
     let bytes = s.as_bytes();
-    
+
     // Fast path: scan for any character needing escape
     let needs_escape = bytes.iter().any(|&b| matches!(b, b'<' | b'>' | b'&' | b'"' | b'\''));
-    
+
     if !needs_escape {
         return std::borrow::Cow::Borrowed(s);
     }
@@ -34,7 +34,7 @@ pub fn escape_to(s: &str, out: &mut String) {
 #[inline(always)]
 fn escape_to_inner(bytes: &[u8], out: &mut String) {
     let mut start = 0;
-    
+
     for (i, &byte) in bytes.iter().enumerate() {
         let escaped = match byte {
             b'<' => "&lt;",
@@ -44,7 +44,7 @@ fn escape_to_inner(bytes: &[u8], out: &mut String) {
             b'\'' => "&apos;",
             _ => continue,
         };
-        
+
         // Batch append non-escaped bytes
         if start < i {
             // SAFETY: Only escaping ASCII chars, so UTF-8 boundaries are preserved
@@ -53,7 +53,7 @@ fn escape_to_inner(bytes: &[u8], out: &mut String) {
         out.push_str(escaped);
         start = i + 1;
     }
-    
+
     // Append remaining
     if start < bytes.len() {
         out.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[start..]) });
@@ -72,7 +72,7 @@ pub fn escape_attr(s: &str) -> std::borrow::Cow<'_, str> {
 #[inline]
 pub fn unescape(s: &str) -> Result<std::borrow::Cow<'_, str>, UnescapeError> {
     let bytes = s.as_bytes();
-    
+
     // Fast path: check if any unescaping is needed using memchr
     match memchr(b'&', bytes) {
         None => Ok(std::borrow::Cow::Borrowed(s)),
@@ -80,8 +80,8 @@ pub fn unescape(s: &str) -> Result<std::borrow::Cow<'_, str>, UnescapeError> {
             let mut result = String::with_capacity(s.len());
             // Add everything before the first &
             if first_amp > 0 {
-                result.push_str(unsafe { 
-                    std::str::from_utf8_unchecked(&bytes[..first_amp]) 
+                result.push_str(unsafe {
+                    std::str::from_utf8_unchecked(&bytes[..first_amp])
                 });
             }
             unescape_from(bytes, first_amp, &mut result)?;
@@ -118,8 +118,8 @@ pub fn unescape_to(s: &str, out: &mut String) -> Result<(), UnescapeError> {
         }
         Some(first_amp) => {
             if first_amp > 0 {
-                out.push_str(unsafe { 
-                    std::str::from_utf8_unchecked(&bytes[..first_amp]) 
+                out.push_str(unsafe {
+                    std::str::from_utf8_unchecked(&bytes[..first_amp])
                 });
             }
             unescape_from(bytes, first_amp, out)
@@ -131,35 +131,35 @@ pub fn unescape_to(s: &str, out: &mut String) -> Result<(), UnescapeError> {
 #[inline(always)]
 fn unescape_from(bytes: &[u8], start: usize, out: &mut String) -> Result<(), UnescapeError> {
     let mut i = start;
-    
+
     while i < bytes.len() {
         if bytes[i] == b'&' {
             let entity_start = i;
             i += 1;
-            
+
             // Find semicolon using memchr for speed
             match memchr(b';', &bytes[i..]) {
                 Some(len) if len > 0 && len <= 10 => {
-                    let entity = unsafe { 
-                        std::str::from_utf8_unchecked(&bytes[i..i + len]) 
+                    let entity = unsafe {
+                        std::str::from_utf8_unchecked(&bytes[i..i + len])
                     };
-                    
+
                     if let Some(c) = decode_entity_fast(entity) {
                         out.push(c);
                         i += len + 1;
-                        
+
                         // Find and append text until next &
                         if let Some(next_amp) = memchr(b'&', &bytes[i..]) {
                             if next_amp > 0 {
-                                out.push_str(unsafe { 
-                                    std::str::from_utf8_unchecked(&bytes[i..i + next_amp]) 
+                                out.push_str(unsafe {
+                                    std::str::from_utf8_unchecked(&bytes[i..i + next_amp])
                                 });
                             }
                             i += next_amp;
                         } else {
                             // No more entities
-                            out.push_str(unsafe { 
-                                std::str::from_utf8_unchecked(&bytes[i..]) 
+                            out.push_str(unsafe {
+                                std::str::from_utf8_unchecked(&bytes[i..])
                             });
                             return Ok(());
                         }
@@ -181,7 +181,7 @@ fn unescape_from(bytes: &[u8], start: usize, out: &mut String) -> Result<(), Une
             i += 1;
         }
     }
-    
+
     Ok(())
 }
 

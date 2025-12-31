@@ -337,14 +337,14 @@ impl<'a> XmlReader<'a> {
 
         // Read data until ?> using memchr for speed
         let data_start = self.pos;
-        
+
         while self.pos + 1 < self.input.len() {
             if let Some(offset) = memchr(b'?', &self.input[self.pos..]) {
                 let check_pos = self.pos + offset;
                 if check_pos + 1 < self.input.len() && self.input[check_pos + 1] == b'>' {
                     self.update_position_for_range(self.pos, check_pos);
                     self.pos = check_pos;
-                    
+
                     let data = std::str::from_utf8(&self.input[data_start..self.pos])
                         .map_err(|_| Error::new(crate::error::ErrorKind::InvalidUtf8))?;
                     self.pos += 2;
@@ -446,9 +446,9 @@ impl<'a> XmlReader<'a> {
         while self.pos + 2 < self.input.len() {
             if let Some(offset) = memchr(b'-', &self.input[self.pos..]) {
                 let check_pos = self.pos + offset;
-                if check_pos + 2 < self.input.len() 
-                    && self.input[check_pos + 1] == b'-' 
-                    && self.input[check_pos + 2] == b'>' 
+                if check_pos + 2 < self.input.len()
+                    && self.input[check_pos + 1] == b'-'
+                    && self.input[check_pos + 2] == b'>'
                 {
                     self.update_position_for_range(self.pos, check_pos);
                     let comment = std::str::from_utf8(&self.input[start..check_pos])
@@ -477,9 +477,9 @@ impl<'a> XmlReader<'a> {
         while self.pos + 2 < self.input.len() {
             if let Some(offset) = memchr(b']', &self.input[self.pos..]) {
                 let check_pos = self.pos + offset;
-                if check_pos + 2 < self.input.len() 
-                    && self.input[check_pos + 1] == b']' 
-                    && self.input[check_pos + 2] == b'>' 
+                if check_pos + 2 < self.input.len()
+                    && self.input[check_pos + 1] == b']'
+                    && self.input[check_pos + 2] == b'>'
                 {
                     self.update_position_for_range(self.pos, check_pos);
                     let data = std::str::from_utf8(&self.input[start..check_pos])
@@ -507,7 +507,7 @@ impl<'a> XmlReader<'a> {
             if let Some(offset) = memchr2(b'<', b'>', &self.input[self.pos..]) {
                 self.update_position_for_range(self.pos, self.pos + offset);
                 self.pos += offset;
-                
+
                 match self.input[self.pos] {
                     b'<' => depth += 1,
                     b'>' => depth -= 1,

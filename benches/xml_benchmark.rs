@@ -69,7 +69,7 @@ fn medium_data() -> Medium {
         title: "Sample Document".to_string(),
         description: "This is a sample document with some description text.".to_string(),
         count: 100,
-        ratio: 3.14159,
+        ratio: 1.23456,
         enabled: true,
         tags: vec![
             "tag1".to_string(),

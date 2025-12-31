@@ -1060,13 +1060,13 @@ mod tests {
         let nums = Numbers {
             i: -42,
             u: 100,
-            f: 3.14,
+            f: 1.234,
         };
 
         let xml = to_string(&nums).unwrap();
         assert!(xml.contains("<i>-42</i>"));
         assert!(xml.contains("<u>100</u>"));
-        assert!(xml.contains("<f>3.14</f>"));
+        assert!(xml.contains("<f>1.234</f>"));
     }
 
     #[test]

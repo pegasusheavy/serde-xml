@@ -884,11 +884,11 @@ mod tests {
             f: f64,
         }
 
-        let xml = "<Numbers><i>-42</i><u>100</u><f>3.14</f></Numbers>";
+        let xml = "<Numbers><i>-42</i><u>100</u><f>1.234</f></Numbers>";
         let nums: Numbers = from_str(xml).unwrap();
         assert_eq!(nums.i, -42);
         assert_eq!(nums.u, 100);
-        assert!((nums.f - 3.14).abs() < 0.001);
+        assert!((nums.f - 1.234).abs() < 0.001);
     }
 
     #[test]

@@ -275,6 +275,7 @@ mod tests {
     #[test]
     fn test_error_reporting() {
         // Test mismatched tags error
+        #[allow(dead_code)]
         #[derive(Debug, Deserialize)]
         struct Item {
             name: String,
