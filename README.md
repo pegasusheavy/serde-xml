@@ -1,12 +1,17 @@
-# serde-xml
+# serde-xml-fast
+
+[![Crates.io](https://img.shields.io/crates/v/serde-xml-fast.svg)](https://crates.io/crates/serde-xml-fast)
+[![Documentation](https://docs.rs/serde-xml-fast/badge.svg)](https://docs.rs/serde-xml-fast)
+[![License](https://img.shields.io/crates/l/serde-xml-fast.svg)](https://github.com/pegasusheavy/serde-xml#license)
 
 A fast, 100% Serde-compatible XML serialization and deserialization library for Rust.
 
 ## Features
 
-- **Full Serde compatibility** - Works with `#[derive(Serialize, Deserialize)]`
-- **High performance** - Zero-copy parsing, SIMD-accelerated string operations
-- **Rich XML support** - Attributes, namespaces, CDATA, comments, processing instructions
+- **Full Serde compatibility** - Works seamlessly with `#[derive(Serialize, Deserialize)]`
+- **High performance** - Zero-copy parsing, SIMD-accelerated string operations via `memchr`
+- **XML Attributes** - First-class support using the `@` prefix convention
+- **Rich XML support** - CDATA, comments, processing instructions, and more
 - **Comprehensive error reporting** - Line/column positions for all errors
 - **Minimal dependencies** - Only `serde`, `memchr`, `itoa`, and `ryu`
 
@@ -61,9 +66,25 @@ fn main() {
 
 ## Examples
 
+Run any example with:
+
+```bash
+cargo run --example <name>
+```
+
+Available examples:
+- `basic` - Simple serialization and deserialization
+- `nested` - Nested struct handling
+- `collections` - Vectors and collections
+- `attributes` - XML attribute support with `@` prefix
+- `html_parsing` - Parsing HTML-like structures
+
 ### Nested Structures
 
 ```rust
+use serde::{Deserialize, Serialize};
+use serde_xml::from_str;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Address {
     city: String,
@@ -93,6 +114,9 @@ assert_eq!(person.address.city, "New York");
 ### Collections
 
 ```rust
+use serde::{Deserialize, Serialize};
+use serde_xml::to_string;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Library {
     book: Vec<String>,
@@ -106,9 +130,9 @@ let xml = to_string(&library).unwrap();
 // <Library><book>Book 1</book><book>Book 2</book></Library>
 ```
 
-### With Attributes
+### XML Attributes
 
-XML attributes are handled using the `@` prefix for field names. Fields without the prefix become child elements:
+Use the `@` prefix to serialize/deserialize XML attributes:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -136,15 +160,16 @@ let xml = to_string(&item).unwrap();
 let xml = r#"<Item id="456" class="sale"><name>Gadget</name></Item>"#;
 let parsed: Item = from_str(xml).unwrap();
 assert_eq!(parsed.id, "456");
-assert_eq!(parsed.class, "sale");
-assert_eq!(parsed.name, "Gadget");
 ```
 
 ### Text Content with Attributes
 
-Use `$value` or `$text` to serialize both attributes and text content:
+Use `$value` or `$text` to combine attributes with text content:
 
 ```rust
+use serde::{Deserialize, Serialize};
+use serde_xml::to_string;
+
 #[derive(Serialize, Deserialize)]
 struct Link {
     #[serde(rename = "@href")]
@@ -161,27 +186,50 @@ let xml = to_string(&link).unwrap();
 // Output: <Link href="https://example.com">Click here</Link>
 ```
 
-### Attribute Escaping
+### HTML-like Parsing
 
-Special characters in attribute values are automatically escaped:
+The library can parse well-formed HTML/XHTML structures:
 
 ```rust
-#[derive(Serialize)]
-struct Element {
-    #[serde(rename = "@title")]
-    title: String,
+use serde::Deserialize;
+use serde_xml::from_str;
+
+#[derive(Deserialize)]
+struct Form {
+    #[serde(rename = "@action")]
+    action: String,
+    #[serde(rename = "@method")]
+    method: Option<String>,
+    #[serde(default)]
+    input: Vec<Input>,
 }
 
-let elem = Element {
-    title: "Hello \"World\" & <Friends>".to_string(),
-};
-let xml = to_string(&elem).unwrap();
-// Output: <Element title="Hello &quot;World&quot; &amp; &lt;Friends&gt;"/>
+#[derive(Deserialize)]
+struct Input {
+    #[serde(rename = "@type")]
+    input_type: String,
+    #[serde(rename = "@name")]
+    name: String,
+}
+
+let html = r#"
+    <Form action="/login" method="POST">
+        <input type="text" name="username"/>
+        <input type="password" name="password"/>
+    </Form>
+"#;
+
+let form: Form = from_str(html).unwrap();
+assert_eq!(form.action, "/login");
+assert_eq!(form.input.len(), 2);
 ```
 
 ### Optional Fields
 
 ```rust
+use serde::{Deserialize, Serialize};
+use serde_xml::from_str;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
     name: String,
@@ -194,9 +242,33 @@ let config: Config = from_str(xml).unwrap();
 assert_eq!(config.value, None);
 ```
 
+### Automatic Escaping
+
+Special characters are automatically escaped in both content and attributes:
+
+```rust
+use serde::Serialize;
+use serde_xml::to_string;
+
+#[derive(Serialize)]
+struct Element {
+    #[serde(rename = "@title")]
+    title: String,
+    content: String,
+}
+
+let elem = Element {
+    title: "Hello \"World\" & <Friends>".to_string(),
+    content: "<script>alert('xss')</script>".to_string(),
+};
+let xml = to_string(&elem).unwrap();
+// Attributes: title="Hello &quot;World&quot; &amp; &lt;Friends&gt;"
+// Content: <content>&lt;script&gt;alert('xss')&lt;/script&gt;</content>
+```
+
 ## Low-Level API
 
-For more control, you can use the reader and writer directly:
+For more control, use the reader and writer directly:
 
 ```rust
 use serde_xml::{XmlReader, XmlWriter, XmlEvent};
@@ -224,6 +296,12 @@ writer.end_element().unwrap();
 
 ```bash
 cargo bench
+```
+
+## Running Tests
+
+```bash
+cargo test
 ```
 
 ## License
