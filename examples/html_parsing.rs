@@ -310,7 +310,7 @@ fn main() {
     println!("  method: {:?}", form.method);
     println!("  Inputs:");
     for input in &form.input {
-        println!("    - {} (type: {}, placeholder: {:?})", 
+        println!("    - {} (type: {}, placeholder: {:?})",
             input.name, input.input_type, input.placeholder);
     }
     println!("  Buttons:");

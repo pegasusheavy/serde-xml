@@ -5,7 +5,9 @@ edition = "2021"
 authors = ["Pegasus Heavy Industries LLC"]
 license = "MIT OR Apache-2.0"
 description = "A fast, 100% Serde-compatible XML serialization and deserialization library"
-repository = "https://github.com/PegasusHeavyIndustries/serde-xml"
+repository = "https://github.com/pegasusheavy/serde-xml"
+homepage = "https://github.com/pegasusheavy/serde-xml"
+documentation = "https://docs.rs/serde-xml"
 keywords = ["xml", "serde", "serialization", "deserialization", "parser"]
 categories = ["encoding", "parser-implementations"]
 readme = "README.md"
@@ -44,6 +46,10 @@ path = "examples/nested.rs"
 [[example]]
 name = "collections"
 path = "examples/collections.rs"
+
+[[example]]
+name = "html_parsing"
+path = "examples/html_parsing.rs"
 
 [profile.release]
 lto = true
